@@ -193,3 +193,186 @@
     (ok true)
   )
 )
+;; Update metrics for a token
+(define-public (update-metrics 
+  (token-address principal)
+  (price uint)
+  (market-cap uint)
+  (liquidity-amount uint)
+  (volume-24h uint)
+  (holder-count uint)
+)
+  (begin
+    ;; Check caller is authorized
+    (asserts! (is-analyzer) ERR-NOT-AUTHORIZED)
+    
+    ;; Check token exists
+    (asserts! (token-exists token-address) ERR-TOKEN-NOT-REGISTERED)
+    
+    ;; Update metrics
+    (map-set token-metrics
+      { token-address: token-address }
+      {
+        price: price,
+        market-cap: market-cap,
+        liquidity-amount: liquidity-amount,
+        volume-24h: volume-24h,
+        holder-count: holder-count,
+        last-updated: block-height
+      }
+    )
+    
+    ;; Detect anomalies
+    (detect-anomalies token-address liquidity-amount)
+    
+    ;; Emit event
+    (print { event: "metrics-updated", token: token-address, price: price, market-cap: market-cap })
+    (ok true)
+  )
+)
+
+;; Set verification status
+(define-public (set-verification-status (token-address principal) (is-verified bool))
+  (begin
+    ;; Check caller is owner
+    (asserts! (is-owner) ERR-NOT-AUTHORIZED)
+    
+    ;; Check token exists
+    (asserts! (token-exists token-address) ERR-TOKEN-NOT-REGISTERED)
+    
+    ;; Update verification status
+    (match (map-get? meme-tokens { token-address: token-address })
+      token-data 
+      (map-set meme-tokens
+        { token-address: token-address }
+        (merge token-data { is-verified: is-verified })
+      )
+      ERR-TOKEN-NOT-REGISTERED
+    )
+    
+    ;; Emit event
+    (print { event: "token-verified", token: token-address, status: is-verified })
+    (ok true)
+  )
+)
+
+;; Update token scores
+(define-public (update-scores
+  (token-address principal)
+  (social-score uint)
+  (technical-score uint)
+  (liquidity-score uint)
+  (holder-score uint)
+)
+  (begin
+    ;; Check caller is authorized
+    (asserts! (is-analyzer) ERR-NOT-AUTHORIZED)
+    
+    ;; Check token exists
+    (asserts! (token-exists token-address) ERR-TOKEN-NOT-REGISTERED)
+    
+    ;; Update scores
+    (match (map-get? meme-tokens { token-address: token-address })
+      token-data 
+      (map-set meme-tokens
+        { token-address: token-address }
+        (merge token-data 
+          { 
+            social-score: social-score,
+            technical-score: technical-score,
+            liquidity-score: liquidity-score,
+            holder-score: holder-score
+          }
+        )
+      )
+      ERR-TOKEN-NOT-REGISTERED
+    )
+    
+    (ok true)
+  )
+)
+
+;; Create an alert for a token
+(define-public (create-alert
+  (token-address principal)
+  (alert-type uint)
+  (description (string-ascii 256))
+)
+  (begin
+    ;; Check caller is authorized
+    (asserts! (is-analyzer) ERR-NOT-AUTHORIZED)
+    
+    ;; Check token exists
+    (asserts! (token-exists token-address) ERR-TOKEN-NOT-REGISTERED)
+    
+    ;; Add alert to map
+    (let ((alert-id (increment-alert-count token-address)))
+      (map-set token-alerts
+        { token-address: token-address, alert-id: alert-id }
+        {
+          alert-type: alert-type,
+          timestamp: block-height,
+          description: description,
+          is-active: true
+        }
+      )
+      
+      ;; Emit event
+      (print { event: "alert-triggered", token: token-address, alert-type: alert-type, description: description })
+      (ok alert-id)
+    )
+  )
+)
+
+;; Subscribe to alerts for a token
+(define-public (subscribe (token-address principal))
+  (begin
+    ;; Check token exists
+    (asserts! (token-exists token-address) ERR-TOKEN-NOT-REGISTERED)
+    
+    ;; Check not already subscribed
+    (asserts! 
+      (not (default-to 
+        false 
+        (get subscribed (map-get? user-subscriptions { user: tx-sender, token-address: token-address }))
+      ))
+      ERR-ALREADY-SUBSCRIBED
+    )
+    
+    ;; Check fee paid
+    (asserts! (>= (stx-get-balance tx-sender) (var-get subscription-fee)) ERR-INSUFFICIENT-FEE)
+    
+    ;; Transfer fee
+    (unwrap! (stx-transfer? (var-get subscription-fee) tx-sender (as-contract tx-sender)) ERR-INSUFFICIENT-FEE)
+    
+    ;; Add subscription
+    (map-set user-subscriptions
+      { user: tx-sender, token-address: token-address }
+      { subscribed: true }
+    )
+    
+    ;; Emit event
+    (print { event: "subscription-added", user: tx-sender, token: token-address })
+    (ok true)
+  )
+)
+
+;; Private functions
+
+;; Detect anomalies in token metrics
+(define-private (detect-anomalies (token-address principal) (current-liquidity uint))
+  (begin
+    ;; Get token data
+    (match (map-get? meme-tokens { token-address: token-address })
+      token-data
+      (let ((initial-liquidity (get initial-liquidity token-data)))
+        ;; Check for significant liquidity reduction
+        (if (< (* current-liquidity u100) (* initial-liquidity u70))
+          (create-alert token-address ALERT-LIQUIDITY-REMOVAL "Significant liquidity reduction detected")
+          (ok u0) ;; No alert
+        )
+      )
+      (ok u0) ;; Token not found, should never happen here
+    )
+  )
+)
