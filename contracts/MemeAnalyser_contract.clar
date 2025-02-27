@@ -376,3 +376,162 @@
     )
   )
 )
+;; Register as a token analyzer
+(define-public (register-as-analyzer)
+  (begin
+    ;; Check not already analyzer
+    (asserts! 
+      (not (default-to 
+        false 
+        (get is-active (map-get? analyzers { address: tx-sender }))
+      ))
+      ERR-ALREADY-ANALYZER
+    )
+    
+    ;; Check stake paid
+    (asserts! (>= (stx-get-balance tx-sender) (var-get analyzer-stake)) ERR-INSUFFICIENT-STAKE)
+    
+    ;; Transfer stake
+    (unwrap! (stx-transfer? (var-get analyzer-stake) tx-sender (as-contract tx-sender)) ERR-INSUFFICIENT-STAKE)
+    
+    ;; Add as analyzer
+    (map-set analyzers
+      { address: tx-sender }
+      { is-active: true }
+    )
+    
+    ;; Emit event
+    (print { event: "analyzer-added", analyzer: tx-sender })
+    (ok true)
+  )
+)
+
+;; Remove an analyzer
+(define-public (remove-analyzer (analyzer principal))
+  (begin
+    ;; Check caller is owner
+    (asserts! (is-owner) ERR-NOT-AUTHORIZED)
+    
+    ;; Check is analyzer
+    (asserts! 
+      (default-to 
+        false 
+        (get is-active (map-get? analyzers { address: analyzer }))
+      )
+      ERR-NOT-ANALYZER
+    )
+    
+    ;; Remove analyzer
+    (map-set analyzers
+      { address: analyzer }
+      { is-active: false }
+    )
+    
+    ;; Return stake (would need to track stakes per analyzer in production)
+    (unwrap! (as-contract (stx-transfer? (var-get analyzer-stake) tx-sender analyzer)) ERR-NOT-AUTHORIZED)
+    
+    ;; Emit event
+    (print { event: "analyzer-removed", analyzer: analyzer })
+    (ok true)
+  )
+)
+
+;; Set subscription fee
+(define-public (set-subscription-fee (new-fee uint))
+  (begin
+    ;; Check caller is owner
+    (asserts! (is-owner) ERR-NOT-AUTHORIZED)
+    
+    ;; Update fee
+    (var-set subscription-fee new-fee)
+    (ok true)
+  )
+)
+
+;; Set analyzer stake
+(define-public (set-analyzer-stake (new-stake uint))
+  (begin
+    ;; Check caller is owner
+    (asserts! (is-owner) ERR-NOT-AUTHORIZED)
+    
+    ;; Update stake
+    (var-set analyzer-stake new-stake)
+    (ok true)
+  )
+)
+
+;; Withdraw fees
+(define-public (withdraw-fees)
+  (begin
+    ;; Check caller is owner
+    (asserts! (is-owner) ERR-NOT-AUTHORIZED)
+    
+    ;; Get contract balance
+    (let ((balance (stx-get-balance (as-contract tx-sender))))
+      ;; Transfer all STX to owner
+      (unwrap! (as-contract (stx-transfer? balance tx-sender (var-get contract-owner))) ERR-NOT-AUTHORIZED)
+      (ok balance)
+    )
+  )
+)
+
+;; Read-only functions
+
+;; Get token data and metrics
+(define-read-only (get-token-analysis (token-address principal))
+  (begin
+    (asserts! (token-exists token-address) ERR-TOKEN-NOT-REGISTERED)
+    
+    (let (
+      (token (map-get? meme-tokens { token-address: token-address }))
+      (metrics (map-get? token-metrics { token-address: token-address }))
+    )
+      {
+        token: token,
+        metrics: metrics
+      }
+    )
+  )
+)
+
+;; Get alert count for a token
+(define-read-only (get-token-alert-count (token-address principal))
+  (begin
+    (asserts! (token-exists token-address) ERR-TOKEN-NOT-REGISTERED)
+    (get-alert-count token-address)
+  )
+)
+
+;; Get a specific alert for a token
+(define-read-only (get-token-alert (token-address principal) (alert-id uint))
+  (begin
+    (asserts! (token-exists token-address) ERR-TOKEN-NOT-REGISTERED)
+    (map-get? token-alerts { token-address: token-address, alert-id: alert-id })
+  )
+)
+
+;; Get total number of registered tokens
+(define-read-only (get-registered-token-count)
+  (var-get registered-tokens-count)
+)
+
+;; Get token address by index
+(define-read-only (get-token-by-index (index uint))
+  (map-get? registered-tokens { index: index })
+)
+
+;; Check if user is subscribed to a token
+(define-read-only (is-subscribed (user principal) (token-address principal))
+  (default-to 
+    false
+    (get subscribed (map-get? user-subscriptions { user: user, token-address: token-address }))
+  )
+)
+
+;; Check if address is an analyzer
+(define-read-only (is-active-analyzer (address principal))
+  (default-to 
+    false
+    (get is-active (map-get? analyzers { address: address }))
+  )
+)
